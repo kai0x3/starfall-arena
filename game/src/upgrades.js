@@ -1,7 +1,9 @@
 // upgrades.js — the level-up draft. When the core meter fills, the game pauses
 // and offers three of these; each one changes how the ship fights in a way the
 // player can feel, and a few can be taken again and stack. Repair is always in
-// the pool while the hull is hurt, so a draft is never three dead cards.
+// the pool while the hull is hurt, so a draft is never three dead cards. The
+// pool holds twelve: guns, hull, motion and the dash drive, with pairs that
+// feed each other — piercing loves a wide volley, the swarm loves deep plating.
 
 export const UPGRADES = [
   {
@@ -62,6 +64,49 @@ export const UPGRADES = [
     mark: '+',
     canTake: (player) => player.hull < player.hullMax,
     apply: (player) => { player.hull = Math.min(player.hullMax, player.hull + 40); },
+  },
+  {
+    id: 'pierce',
+    name: 'Piercing Rounds',
+    blurb: 'Bolts fly through one extra enemy. With Split Cannon, a crowd is a corridor.',
+    mark: '⇢',
+    canTake: (player) => player.pierce < 2,
+    apply: (player) => { player.pierce += 1; },
+  },
+  {
+    id: 'crit',
+    name: 'Critical Systems',
+    blurb: 'Each bolt has a 15% chance to land triple damage. Watch for the flash.',
+    mark: '✦',
+    canTake: (player) => player.critChance < 0.6,
+    apply: (player) => { player.critChance += 0.15; },
+  },
+  {
+    id: 'dash',
+    name: 'Phase Dash',
+    blurb: 'Unlock the dash drive: SHIFT or RIGHT-CLICK bursts you through danger, untouchable.',
+    mark: '⇨',
+    canTake: (player) => !player.dashUnlocked,
+    apply: (player) => { player.dashUnlocked = true; },
+  },
+  {
+    id: 'regen',
+    name: 'Repair Swarm',
+    blurb: 'Nanobots patch 0.9 hull a second, forever. Pairs well with Aegis Plating.',
+    mark: '✚',
+    canTake: (player) => player.regen < 3.6,
+    apply: (player) => { player.regen += 0.9; },
+  },
+  {
+    id: 'overclock',
+    name: 'Overclock Core',
+    blurb: 'Fire 10% faster and fly 8% quicker. Everything, slightly too much.',
+    mark: '↯',
+    canTake: () => true,
+    apply: (player) => {
+      player.fireInterval *= 0.9;
+      player.speed *= 1.08;
+    },
   },
 ];
 

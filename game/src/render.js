@@ -3,7 +3,7 @@
 // screens. It only reads the world; it never changes it. Files and functions are
 // named for the thing they draw so the game's outline reads like its screen.
 
-import { COLORS, VIEW_HEIGHT, VIEW_WIDTH } from './config.js';
+import { COLORS, PLAYER, VIEW_HEIGHT, VIEW_WIDTH } from './config.js';
 
 // A private random stream for the backdrop, so the stars are the same field on
 // every load and never eat the gameplay's randomness.
@@ -189,10 +189,80 @@ function drawEnemy(ctx, enemy, time) {
     ctx.beginPath();
     ctx.arc(1, 0, 4, 0, Math.PI * 2);
     ctx.fill();
+  } else if (enemy.kind === 'charger') {
+    // A spined dart. Telegraphing, it strobes white-hot and shivers in place:
+    // the tell a player learns to dodge on.
+    const telling = enemy.mode === 'telegraph';
+    if (telling && Math.sin(time * 46) > 0) ctx.fillStyle = '#ffffff';
+    ctx.rotate(enemy.angle);
+    if (telling) ctx.translate(Math.sin(time * 90) * 1.6, 0);
+    ctx.beginPath();
+    ctx.moveTo(16, 0);
+    ctx.lineTo(-4, 5);
+    ctx.lineTo(-13, 11);
+    ctx.lineTo(-8, 0);
+    ctx.lineTo(-13, -11);
+    ctx.lineTo(-4, -5);
+    ctx.closePath();
+    ctx.globalAlpha = 0.95;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  } else if (enemy.kind === 'orbiter') {
+    // A ring with a satellite bead riding it, forever mid-circle.
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, enemy.radius - 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.rotate(enemy.angle * 2.2);
+    ctx.beginPath();
+    ctx.arc(enemy.radius + 3, 0, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, 3.6, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (enemy.kind === 'dread') {
+    // The Dreadnought: a hex hull the size of a house, a turning toothed ring
+    // around it, and one white eye that never blinks.
+    ctx.rotate(enemy.angle * 0.4);
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const px = Math.cos(a) * (enemy.radius + 7);
+      const py = Math.sin(a) * (enemy.radius + 7);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.globalAlpha = 0.55;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.rotate(-enemy.angle * 0.4);
+    // The hull keeps its own colour under fire — a hull this big flashing
+    // white on every hit would strobe; the flash lives in the inner disc.
+    ctx.fillStyle = COLORS[enemy.kind];
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      const px = Math.cos(a) * enemy.radius;
+      const py = Math.sin(a) * enemy.radius;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = flash ? '#ffffff' : '#2a0a16';
+    ctx.beginPath();
+    ctx.arc(0, 0, enemy.radius * 0.52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(0, 0, 7, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
   // A thin health arc over anything tougher than a mite, once it is hurt.
-  if (enemy.hpMax > 1 && enemy.hp < enemy.hpMax) {
+  // The Dreadnought's health rides the boss bar in the HUD instead.
+  if (enemy.kind !== 'dread' && enemy.hpMax > 1 && enemy.hp < enemy.hpMax) {
     ctx.strokeStyle = 'rgba(255,255,255,0.65)';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
@@ -269,7 +339,7 @@ function bar(ctx, x, y, w, h, share, color, label) {
   }
 }
 
-function drawHud(ctx, world) {
+function drawHud(ctx, world, time) {
   const player = world.player;
   ctx.textBaseline = 'alphabetic';
   // Score and combo, top-left.
@@ -304,16 +374,40 @@ function drawHud(ctx, world) {
   ctx.fillStyle = COLORS.core;
   ctx.font = '700 16px system-ui, sans-serif';
   ctx.fillText(`◆ ${world.coresBanked} CORES`, VIEW_WIDTH - 22, 88);
-  // Hull, bottom-left; the bar changes colour as it empties.
+  // Hull, bottom-left; the bar changes colour as it empties, and pulses when
+  // the ship is nearly gone.
   const hullShare = player.hull / player.hullMax;
   const hullColor = hullShare > 0.5 ? COLORS.hullGood : hullShare > 0.25 ? COLORS.hullHurt : COLORS.hullBad;
   bar(ctx, 22, VIEW_HEIGHT - 34, 230, 13, hullShare, hullColor, 'HULL');
+  if (hullShare <= 0.25 && hullShare > 0 && Math.sin(time * 7) > 0) {
+    ctx.strokeStyle = COLORS.hullBad;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(21, VIEW_HEIGHT - 35, 232, 15);
+  }
   ctx.fillStyle = COLORS.textMain;
   ctx.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
   ctx.textAlign = 'left';
   ctx.fillText(`${Math.ceil(player.hull)} / ${player.hullMax}`, 260, VIEW_HEIGHT - 23);
+  // The dash drive's charge, above the hull, once the upgrade is drafted.
+  if (player.dashUnlocked) {
+    const ready = player.dashCooldown <= 0;
+    bar(ctx, 22, VIEW_HEIGHT - 58, 120, 6, ready ? 1 : 1 - player.dashCooldown / PLAYER.dashCooldown,
+      ready ? COLORS.ship : COLORS.textDim, null);
+    ctx.fillStyle = ready ? COLORS.ship : COLORS.textDim;
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.fillText(ready ? 'DASH READY' : 'DASH', 148, VIEW_HEIGHT - 51);
+  }
   // Experience, bottom-right.
   bar(ctx, VIEW_WIDTH - 252, VIEW_HEIGHT - 34, 230, 13, world.xp / world.xpNext, COLORS.xp, 'NEXT LEVEL');
+  // The boss bar, top-centre under the wave, while a Dreadnought lives.
+  const boss = world.enemies.find((e) => e.kind === 'dread');
+  if (boss) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = COLORS.dread;
+    ctx.font = '700 12px system-ui, sans-serif';
+    ctx.fillText('DREADNOUGHT', VIEW_WIDTH / 2, 84);
+    bar(ctx, VIEW_WIDTH / 2 - 190, 92, 380, 9, boss.hp / boss.hpMax, COLORS.dread, null);
+  }
 }
 
 // --- Screens ------------------------------------------------------------------
@@ -342,7 +436,8 @@ export function drawTitle(ctx, time) {
   const lines = [
     'WASD / ARROWS — fly        MOUSE — aim        HOLD CLICK / SPACE — fire',
     'Shoot the swarm, gather the cores it drops, and spend each level on an upgrade.',
-    'Darts chase. Orbs split. Weavers keep their distance and shoot back.',
+    'Darts chase. Orbs split. Weavers shoot back. Chargers flash, then lunge.',
+    'Orbiters circle and close in. Every fifth wave, the Dreadnought comes.',
     'P — pause        M — mute',
   ];
   lines.forEach((line, i) => ctx.fillText(line, VIEW_WIDTH / 2, 452 + i * 27));
@@ -496,7 +591,7 @@ export function drawFrame(ctx, world, ui) {
     ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
   }
 
-  drawHud(ctx, world);
+  drawHud(ctx, world, ui.time);
   if (ui.muted) {
     ctx.textAlign = 'center';
     ctx.fillStyle = COLORS.textDim;

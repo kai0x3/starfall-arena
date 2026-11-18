@@ -23,6 +23,13 @@ export class SoundBank {
     this.step = 0;
     this.nextStepAt = 0;
     this.musicOn = false;
+    this.intensity = 0; // 0 calm, 1 late waves, 2 the Dreadnought is out
+  }
+
+  // The game loop reports how hot the arena is; the sequencer answers with
+  // hats and a busier arpeggio rather than a new song.
+  setIntensity(level) {
+    this.intensity = level;
   }
 
   // Create the context the first time the player does something; safe to call
@@ -121,6 +128,43 @@ export class SoundBank {
     this.#tone({ freq: 660, freqEnd: 990, type: 'sine', seconds: 0.08, gain: 0.06 });
   }
 
+  // The dash: a breath of filtered noise swept upward, gone in a blink.
+  dash() {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.Q.value = 1.4;
+    filter.frequency.setValueAtTime(500, t0);
+    filter.frequency.exponentialRampToValueAtTime(3400, t0 + 0.16);
+    const amp = this.ctx.createGain();
+    amp.gain.setValueAtTime(0.14, t0);
+    amp.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+    src.connect(filter).connect(amp).connect(this.master);
+    src.start(t0, Math.random() * 0.3);
+    src.stop(t0 + 0.2);
+  }
+
+  // A critical hit: a bright little ping above the gunfire.
+  crit() {
+    this.#tone({ freq: 1560, freqEnd: 1180, type: 'square', seconds: 0.06, gain: 0.05 });
+  }
+
+  // The boss warning: two low alarm tones, impossible to mistake.
+  bossWarn() {
+    this.#tone({ freq: 98, type: 'sawtooth', seconds: 0.34, gain: 0.13 });
+    this.#tone({ freq: 98, type: 'sawtooth', seconds: 0.34, gain: 0.13, delay: 0.42 });
+    this.#tone({ freq: 147, type: 'sawtooth', seconds: 0.4, gain: 0.1, delay: 0.84 });
+  }
+
+  // The Dreadnought firing: a deep thump under its rings and volleys.
+  bossShot() {
+    this.#tone({ freq: 82, freqEnd: 46, type: 'sine', seconds: 0.22, gain: 0.15 });
+  }
+
   hurt() {
     this.#tone({ freq: 170, freqEnd: 55, type: 'sawtooth', seconds: 0.22, gain: 0.14 });
     this.#noise({ seconds: 0.16, gain: 0.1, from: 1800, to: 300 });
@@ -161,15 +205,46 @@ export class SoundBank {
     const bass = BASS_LINE[inBar];
     if (bass) {
       this.#tone({ freq: NOTE(bass), type: 'triangle', seconds: 0.21, gain: 0.085, delay });
+      // At full heat the bass doubles an octave up on its off hits.
+      if (this.intensity >= 2 && inBar % 4 === 2) {
+        this.#tone({ freq: NOTE(bass + 12), type: 'triangle', seconds: 0.14, gain: 0.04, delay });
+      }
     }
     if (inBar === 0) {
       for (const midi of PAD_CHORDS[bar]) {
         this.#tone({ freq: NOTE(midi), type: 'sine', seconds: STEP_SECONDS * 15, gain: 0.016, delay });
       }
     }
+    // Hats arrive with the late waves: a tick of high noise on the off steps.
+    if (this.intensity >= 1 && step % 2 === 1) {
+      this.#hat(delay);
+    }
     if (step % 2 === 0 && Math.random() < 0.8) {
       const arp = ARP_NOTES[(step / 2) % 16];
       this.#tone({ freq: NOTE(arp), type: 'sine', seconds: 0.14, gain: 0.028, delay });
     }
+    // The boss doubles the arpeggio's pace: a note on every single step.
+    if (this.intensity >= 2 && step % 2 === 1) {
+      const arp = ARP_NOTES[(step + 8) % 16];
+      this.#tone({ freq: NOTE(arp), type: 'sine', seconds: 0.11, gain: 0.02, delay });
+    }
+  }
+
+  // A hat is the noise buffer through a high shelf, cut very short.
+  #hat(delay) {
+    if (!this.ctx) return;
+    const t0 = this.ctx.currentTime + delay;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 7000;
+    const amp = this.ctx.createGain();
+    amp.gain.setValueAtTime(0.035, t0);
+    amp.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.05);
+    src.connect(filter).connect(amp).connect(this.master);
+    src.start(t0, Math.random() * 0.3);
+    src.stop(t0 + 0.07);
   }
 }

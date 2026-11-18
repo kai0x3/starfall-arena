@@ -36,11 +36,15 @@ export class Input {
         this.mouseDown = true;
         this.mouseClicked = true;
       }
+      if (event.button === 2) this.rightClicked = true;
     });
+    // The right button is the dash's second home; the browser menu never opens.
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     window.addEventListener('mouseup', (event) => {
       if (event.button === 0) this.mouseDown = false;
     });
     this.mouseClicked = false;
+    this.rightClicked = false;
   }
 
   // The canvas is scaled by CSS to fit the window; convert the event's page
@@ -73,9 +77,16 @@ export class Input {
     return this.mouseDown || this.isDown('Space');
   }
 
+  // Edge-triggered like wasPressed: a dash begins the frame Shift or the
+  // right mouse button goes down, never by holding them.
+  dashPressed() {
+    return this.rightClicked || this.wasPressed('ShiftLeft') || this.wasPressed('ShiftRight');
+  }
+
   // Called once at the end of each frame so presses and clicks live one frame.
   endFrame() {
     this.keysPressed.clear();
     this.mouseClicked = false;
+    this.rightClicked = false;
   }
 }

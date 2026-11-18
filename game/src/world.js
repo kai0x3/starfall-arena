@@ -3,7 +3,7 @@
 // feeds the score, and the meter that feeds the level-up draft. Rendering reads
 // this; input steers it; nothing here knows about the DOM.
 
-import { COLORS, ENEMIES, SCORE, VIEW_HEIGHT, VIEW_WIDTH, WAVES, WEAVER } from './config.js';
+import { COLORS, DREAD, ENEMIES, ORBITER, PLAYER, SCORE, VIEW_HEIGHT, VIEW_WIDTH, WAVES, WEAVER } from './config.js';
 import {
   burst, makeBullet, makeCore, makeEnemy, makeEnemyBolt, makePlayer, steerEnemy, steerPlayer,
 } from './entities.js';
@@ -55,16 +55,32 @@ export class World {
   // --- Waves ---------------------------------------------------------------
 
   #planWave(n) {
+    // Every fifth wave is the Dreadnought: the boss alone at first, with a
+    // thin escort of darts and mites trickling in behind it.
+    if (n % WAVES.bossEveryWaves === 0) {
+      const queue = ['dread'];
+      let escort = Math.floor((WAVES.baseBudget + WAVES.budgetPerWave * n) / 3);
+      while (escort > 0) {
+        queue.push(Math.random() < 0.5 ? 'dart' : 'mite');
+        escort -= 1;
+      }
+      return queue;
+    }
     let budget = WAVES.baseBudget + WAVES.budgetPerWave * n;
     const kinds = ['dart'];
+    if (n >= WAVES.unlockWave.mite) kinds.push('mite');
     if (n >= WAVES.unlockWave.orb) kinds.push('orb');
     if (n >= WAVES.unlockWave.weaver) kinds.push('weaver');
+    if (n >= WAVES.unlockWave.charger) kinds.push('charger');
+    if (n >= WAVES.unlockWave.orbiter) kinds.push('orbiter');
     const queue = [];
     while (budget > 0) {
       const kind = kinds[Math.floor(Math.random() * kinds.length)];
       if (WAVES.cost[kind] > budget && kind !== 'dart') continue;
       budget -= WAVES.cost[kind];
       queue.push(kind);
+      // Mites hunt in pairs: a point spent on one brings its sibling free.
+      if (kind === 'mite') queue.push('mite');
     }
     // A wave should arrive mixed, not sorted: shuffle the queue.
     for (let i = queue.length - 1; i > 0; i--) {
@@ -106,8 +122,17 @@ export class World {
           const kind = this.spawnQueue.shift();
           const point = this.#spawnPoint();
           this.enemies.push(makeEnemy(kind, point.x, point.y, this.wave));
+          if (kind === 'dread') {
+            // The boss announces itself: a banner, an alarm, a held breath.
+            this.#addText(VIEW_WIDTH / 2, 210, '⚠ DREADNOUGHT INBOUND ⚠', COLORS.dread, 2.2, 30);
+            this.sound.bossWarn();
+          }
         }
       } else if (this.enemies.length === 0) {
+        // The wave is cleared: pay the bonus where the player can see it.
+        const bonus = this.wave * WAVES.clearBonusPerWave;
+        this.score += bonus;
+        this.#addText(VIEW_WIDTH / 2, 150, `WAVE ${this.wave} CLEAR  +${bonus}`, COLORS.core, 1.6, 24);
         this.waveState = 'intermission';
         this.waveTimer = WAVES.intermission;
       } else {
@@ -131,7 +156,9 @@ export class World {
         x: player.x + Math.cos(aimAngle) * (player.radius + 4),
         y: player.y + Math.sin(aimAngle) * (player.radius + 4),
       };
-      this.bullets.push(makeBullet(nose.x, nose.y, aimAngle + offset, player.bulletDamage));
+      const bolt = makeBullet(nose.x, nose.y, aimAngle + offset, player.bulletDamage);
+      bolt.pierceLeft = player.pierce; // Piercing Rounds: hulls this bolt may cross
+      this.bullets.push(bolt);
     }
     this.sound.shoot();
   }
@@ -144,10 +171,11 @@ export class World {
     this.score += gained;
     this.#addText(enemy.x, enemy.y - 10, `+${gained}`, COLORS.combo, 0.8, 15);
     const stats = ENEMIES[enemy.kind];
-    burst(this.particles, enemy.x, enemy.y, COLORS[enemy.kind], enemy.kind === 'orb' ? 26 : 15,
-      enemy.kind === 'orb' ? 300 : 240, 0.6, 3.4);
-    this.sound.explosion(enemy.kind === 'orb');
-    this.shake = Math.min(9, this.shake + (enemy.kind === 'orb' ? 5 : 2.2));
+    const big = enemy.kind === 'orb' || enemy.kind === 'dread';
+    burst(this.particles, enemy.x, enemy.y, COLORS[enemy.kind], enemy.kind === 'dread' ? 60 : big ? 26 : 15,
+      big ? 300 : 240, 0.6, 3.4);
+    this.sound.explosion(big);
+    this.shake = Math.min(enemy.kind === 'dread' ? 16 : 9, this.shake + (enemy.kind === 'dread' ? 12 : big ? 5 : 2.2));
     if (enemy.kind === 'orb') {
       // The splitter's promise: three mites boil out of the wreck.
       for (let i = 0; i < 3; i++) {
@@ -155,7 +183,13 @@ export class World {
         this.enemies.push(mite);
       }
     }
-    if (Math.random() < stats.coreChance) {
+    if (enemy.kind === 'dread') {
+      // The boss pays in cores: a shower of them, rich ones among the plain.
+      for (let i = 0; i < DREAD.coreDrop; i++) {
+        this.cores.push(makeCore(enemy.x + rand(-30, 30), enemy.y + rand(-30, 30), i < 2 ? 2 : 1));
+      }
+      this.#addText(enemy.x, enemy.y - 44, 'DREADNOUGHT DOWN', COLORS.dread, 1.8, 26);
+    } else if (Math.random() < stats.coreChance) {
       this.cores.push(makeCore(enemy.x, enemy.y, stats.coreValue));
     }
   }
@@ -222,8 +256,39 @@ export class World {
     this.time += dt;
     const player = this.player;
 
-    steerPlayer(player, input.moveAxis(), dt);
+    // The Phase Dash, once drafted: a burst along the keys (or the aim, when
+    // no key is held) that the steering cannot cap and nothing can wound.
+    if (player.dashCooldown > 0) player.dashCooldown -= dt;
+    if (player.dashUnlocked && player.dashTime <= 0 && player.dashCooldown <= 0
+      && typeof input.dashPressed === 'function' && input.dashPressed()) {
+      const axis = input.moveAxis();
+      const dir = (axis.x !== 0 || axis.y !== 0)
+        ? Math.atan2(axis.y, axis.x)
+        : Math.atan2(input.mouseY - player.y, input.mouseX - player.x);
+      player.dashVx = Math.cos(dir) * PLAYER.dashSpeed;
+      player.dashVy = Math.sin(dir) * PLAYER.dashSpeed;
+      player.dashTime = PLAYER.dashSeconds;
+      player.dashCooldown = PLAYER.dashCooldown;
+      player.invulnerable = Math.max(player.invulnerable, PLAYER.dashSeconds + 0.08);
+      this.sound.dash();
+    }
+    if (player.dashTime > 0) {
+      player.dashTime -= dt;
+      player.x = Math.min(VIEW_WIDTH - player.radius, Math.max(player.radius, player.x + player.dashVx * dt));
+      player.y = Math.min(VIEW_HEIGHT - player.radius, Math.max(player.radius, player.y + player.dashVy * dt));
+      player.vx = player.dashVx * 0.35; // the exit keeps a whisper of the burst
+      player.vy = player.dashVy * 0.35;
+      player.thrust = 1;
+      burst(this.particles, player.x, player.y, COLORS.ship, 2, 60, 0.3, 3.4);
+    } else {
+      steerPlayer(player, input.moveAxis(), dt);
+    }
     if (player.invulnerable > 0) player.invulnerable -= dt;
+
+    // The Repair Swarm works quietly, a fraction of hull at a time.
+    if (player.regen > 0 && player.hull > 0) {
+      player.hull = Math.min(player.hullMax, player.hull + player.regen * dt);
+    }
 
     // Aim: at the mouse, or wherever the autopilot points.
     const aimAngle = autopilot
@@ -282,9 +347,28 @@ export class World {
     for (const enemy of this.enemies) {
       const event = steerEnemy(enemy, this.player, dt);
       if (event === 'fire') {
+        // A weaver or an orbiter lets one bolt go, each at its own pace.
         const angle = Math.atan2(this.player.y - enemy.y, this.player.x - enemy.x);
-        this.enemyBolts.push(makeEnemyBolt(enemy.x, enemy.y, angle));
+        const speed = enemy.kind === 'orbiter' ? ORBITER.boltSpeed : WEAVER.boltSpeed;
+        this.enemyBolts.push(makeEnemyBolt(enemy.x, enemy.y, angle, speed));
         this.sound.enemyHit();
+      } else if (event === 'radial') {
+        // The Dreadnought's ring: bolts in every direction at once, with a
+        // random seam so no two rings read the same.
+        const seam = Math.random() * Math.PI * 2;
+        for (let i = 0; i < DREAD.radialBolts; i++) {
+          const angle = seam + (i / DREAD.radialBolts) * Math.PI * 2;
+          this.enemyBolts.push(makeEnemyBolt(enemy.x, enemy.y, angle, DREAD.boltSpeed));
+        }
+        this.sound.bossShot();
+      } else if (event === 'volley') {
+        // The Dreadnought's answer to a ship that keeps its distance: three
+        // bolts fanned across the ship's bearing.
+        const aim = Math.atan2(this.player.y - enemy.y, this.player.x - enemy.x);
+        for (const offset of [-0.17, 0, 0.17]) {
+          this.enemyBolts.push(makeEnemyBolt(enemy.x, enemy.y, aim + offset, DREAD.boltSpeed * 1.25));
+        }
+        this.sound.bossShot();
       }
     }
   }
@@ -322,12 +406,28 @@ export class World {
       if (bullet.life <= 0) continue;
       for (const enemy of this.enemies) {
         if (enemy.hp <= 0) continue;
+        if (bullet.hitSet && bullet.hitSet.has(enemy)) continue; // already pierced this hull
         if (dist2(bullet, enemy) < (bullet.radius + enemy.radius) ** 2) {
-          bullet.life = 0;
-          enemy.hp -= bullet.damage;
-          enemy.flash = 0.09;
-          burst(this.particles, bullet.x, bullet.y, COLORS.bullet, 3, 150, 0.25, 2.2);
-          if (enemy.hp > 0) this.sound.enemyHit();
+          // Critical Systems: some bolts land triple, and say so in the open.
+          const crit = this.player.critChance > 0 && Math.random() < this.player.critChance;
+          enemy.hp -= crit ? bullet.damage * 3 : bullet.damage;
+          enemy.flash = crit ? 0.16 : 0.09;
+          burst(this.particles, bullet.x, bullet.y, crit ? COLORS.combo : COLORS.bullet,
+            crit ? 8 : 3, crit ? 230 : 150, 0.25, 2.2);
+          if (crit) {
+            this.#addText(enemy.x, enemy.y - enemy.radius - 8, 'CRIT', COLORS.combo, 0.6, 14);
+            this.sound.crit();
+          } else if (enemy.hp > 0) {
+            this.sound.enemyHit();
+          }
+          // Piercing Rounds: the bolt flies on through a counted few hulls,
+          // remembering each one so it never strikes the same hull twice.
+          if ((bullet.pierceLeft ?? 0) > 0) {
+            bullet.pierceLeft -= 1;
+            (bullet.hitSet ??= new Set()).add(enemy);
+          } else {
+            bullet.life = 0;
+          }
           break;
         }
       }

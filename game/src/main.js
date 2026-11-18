@@ -2,15 +2,20 @@
 // and the four screens' comings and goings (title, playing, the level-up draft,
 // paused, game over); the world owns the fight and render.js owns the drawing.
 //
-// Two URL parameters exist for the maker's own screenshot harness, in the open:
+// Three URL parameters exist for the maker's own screenshot harness, in the open:
 //   ?seed=<n>     replace Math.random with a seeded stream, for repeatable shots
 //   ?shot=play    attract mode: the game starts itself and an autopilot flies
 //   ?shot=end     attract mode that stops flying after a few seconds, so the
 //                 swarm wins honestly and the game-over screen is a real one
-// With neither, a human plays.
+//   ?shot=boss    attract mode staged at the boss wave, guns already upgraded
+//   ?shot=draft   attract mode with cores scattered on the ship, so the first
+//                 level-up draft opens at once and can be photographed
+//   ?wave=<n>     with a shot mode, begin the run at wave n instead of wave 1
+// With none of them, a human plays.
 
 import { SoundBank } from './audio.js';
 import { VIEW_HEIGHT, VIEW_WIDTH } from './config.js';
+import { makeCore } from './entities.js';
 import { Input } from './input.js';
 import { drawFrame, drawGameOver, drawLevelDraft, drawPaused, drawTitle, levelCardRects } from './render.js';
 import { World } from './world.js';
@@ -102,11 +107,12 @@ function autopilotInput(w) {
     mouseX: w.player.x + Math.cos(autopilot.aimAngle(w)) * 100,
     mouseY: w.player.y + Math.sin(autopilot.aimAngle(w)) * 100,
     firing: () => false, // the autopilot object itself answers firing
+    dashPressed: () => false, // the autopilot never dashes
   };
 }
 
 function autopilotActive() {
-  if (shotMode === 'play') return true;
+  if (shotMode === 'play' || shotMode === 'boss' || shotMode === 'draft') return true;
   if (shotMode === 'end') return time < doomAt;
   return false;
 }
@@ -124,6 +130,27 @@ function startRun() {
   sound.startMusic();
   state = 'playing';
   if (shotMode === 'end') doomAt = time + 6;
+  // Screenshot staging, the same honesty as the attract modes above: a boss
+  // shot begins at the boss wave with a fought-in ship, a draft shot begins
+  // with the first level's cores already scattered at the ship's nose, and a
+  // ?wave=<n> shot begins at that wave. A human's run never takes this path.
+  if (shotMode) {
+    const startWave = shotMode === 'boss' ? 5 : Number(params.get('wave')) || 1;
+    if (startWave > 1) {
+      world.wave = startWave - 1;
+      world.waveTimer = 0.4;
+    }
+    if (shotMode === 'boss') {
+      world.player.bulletDamage = 2;
+      world.player.projectiles = 2;
+      world.player.fireInterval *= 0.8;
+    }
+    if (shotMode === 'draft') {
+      for (let i = 0; i < 7; i++) {
+        world.cores.push(makeCore(world.player.x + (i - 3) * 16, world.player.y + 26, 1));
+      }
+    }
+  }
 }
 
 function togglePause() {
@@ -188,6 +215,8 @@ function frame(now) {
 
   if (input.wasPressed('KeyM')) sound.toggleMuted();
   sound.unlock();
+  // The music follows the fight: hats from wave 4, full drive under the boss.
+  sound.setIntensity(world.enemies.some((e) => e.kind === 'dread') ? 2 : world.wave >= 4 ? 1 : 0);
   sound.update();
 
   if (state === 'title') {
@@ -220,7 +249,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Attract modes begin on their own; a human's game waits for its launch click.
-if (shotMode === 'play' || shotMode === 'end') startRun();
+if (shotMode === 'play' || shotMode === 'end' || shotMode === 'boss' || shotMode === 'draft') startRun();
 
 // A handle for the maker's test harness: read the state, never write it.
 window.__starfall = { world, get state() { return state; } };
